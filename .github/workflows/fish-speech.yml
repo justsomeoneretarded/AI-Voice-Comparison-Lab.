@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install system packages
         run: sudo apt-get update && sudo apt-get install -y ffmpeg portaudio19-dev python3-dev build-essential
       - name: Install model dependencies
@@ -22,9 +22,37 @@ jobs:
           python -m pip install --upgrade pip
           git clone --depth 1 https://github.com/fishaudio/fish-speech.git vendor/fish-speech
           python -m pip install soundfile numpy
-          python -m pip install -e vendor/fish-speech
-      - name: Generate both voices
-        run: python run_comparison.py --model fish-speech
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -e 'vendor/fish-speech[cpu]'
+      - name: Download Fish Speech S2-Pro model
+        run: |
+          python -m pip install 'huggingface_hub[cli]'
+          hf download fishaudio/s2-pro --local-dir vendor/fish-speech/checkpoints/s2-pro
+      - name: Generate both voices with official inference server
+        run: |
+          python - <<'PY'
+          import urllib.request,subprocess
+          from pathlib import Path
+          Path("references").mkdir(exist_ok=True)
+          for name in ("warguy", "kit-laser"):
+              urllib.request.urlretrieve("https://raw.githubusercontent.com/justsomeoneretarded/Top10-Movies/main/assets/voices/"+name+".ogg", "references/"+name+".ogg")
+              subprocess.run(["ffmpeg","-y","-loglevel","error","-i","references/"+name+".ogg","-ac","1","-ar","24000","references/"+name+".wav"],check=True)
+          PY
+          mkdir -p outputs
+          cd vendor/fish-speech
+          python tools/api_server.py --listen 127.0.0.1:8080 --llama-checkpoint-path checkpoints/s2-pro --decoder-checkpoint-path checkpoints/s2-pro/codec.pth --decoder-config-name modded_dac_vq > ../../outputs/server.log 2>&1 &
+          SERVER_PID=$!
+          cd ../..
+          python - <<'PY'
+          import time, urllib.request,sys
+          for i in range(90):
+              try:
+                  if urllib.request.urlopen("http://127.0.0.1:8080/v1/health",timeout=3).status == 200: break
+              except Exception: time.sleep(10)
+          else: sys.exit("Fish Speech server did not become healthy")
+          PY
+          for voice in warguy kit-laser; do
+            (cd vendor/fish-speech && python tools/api_client.py --url http://127.0.0.1:8080/v1/tts --text "At number five, we have a movie that completely changed the game. The action is intense, the story keeps you guessing, and the final scene is unforgettable. But wait until you see number four." --reference_audio "../../references/${voice}.wav" --reference_text "This is the reference speaker." --output "../../outputs/fish-speech_${voice}" --format wav --no-play)
+          done
       - name: Upload finished recordings even on failure
         if: always()
         uses: actions/upload-artifact@v4
