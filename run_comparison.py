@@ -42,11 +42,12 @@ def generate(model, ref, dest):
         wav, sr, _ = engine.infer(ref_file=ref, ref_text="", gen_text=TEXT)
         sf.write(dest, wav, sr)
     elif model == "cosyvoice":
-        from cosyvoice.cli.cosyvoice import AutoModel
-        engine = AutoModel(model_dir="pretrained_models/CosyVoice2-0.5B")
+        from cosyvoice.cli.cosyvoice import CosyVoice2
+        from cosyvoice.utils.file_utils import load_wav
+        engine = CosyVoice2("pretrained_models/CosyVoice2-0.5B", load_jit=False, load_onnx=False, load_trt=False)
         chunks = []
         sr = engine.sample_rate
-        for result in engine.inference_zero_shot(TEXT, "This is a sample of the reference speaker.", ref, stream=False):
+        for result in engine.inference_zero_shot(TEXT, "This is a sample of the reference speaker.", load_wav(ref, 16000), stream=False):
             chunks.append(result["tts_speech"].squeeze().cpu().numpy())
         sf.write(dest, np.concatenate(chunks), sr)
     elif model == "fish-speech":
